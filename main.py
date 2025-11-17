@@ -101,7 +101,7 @@ Base.metadata.create_all(bind=engine)
 
 origins = [
     "http://127.0.0.1:5500",
-    "https://deploy-front-pi.vercel.app"
+    "https://deploy-front-theta.vercel.app"
 ]
 
 app.add_middleware(
