@@ -1,13 +1,25 @@
 import os
 import requests
 from dotenv import load_dotenv
-from fastapi import FastAPI
+from fastapi import FastAPI, Depends
 from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import create_engine, Column, Integer, String
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import sessionmaker, Session
 
 
 load_dotenv()
 API_KEY = os.getenv("GEMINI_API_KEY")
+
+
+DATABASE_URL = os.getenv("DATABASE_URL")
+if not DATABASE_URL:
+    raise ValueError("DATABASE_URL não foi definida no .env ou nas variáveis de ambiente.")
+
+engine = create_engine(DATABASE_URL)
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+Base = declarative_base()
 
 
 if not API_KEY:
@@ -74,10 +86,24 @@ def carregar_contexto():
         return "Conteúdo oficial do site não pôde ser carregado no momento."
 
 
+class LogPergunta(Base):
+    __tablename__ = "log_perguntas"
+
+    id = Column(Integer, primary_key=True, index=True)
+    pergunta = Column(String(500), index=True)
+
+
 app = FastAPI()
 
 
-origins = ["*"]
+Base.metadata.create_all(bind=engine)
+
+
+origins = [
+    "http://127.0.0.1:5500",
+    "https://deploy-front-pi.vercel.app"
+]
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
@@ -87,18 +113,41 @@ app.add_middleware(
 )
 
 
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+
 class Pergunta(BaseModel):
     pergunta: str
 
 
 @app.post("/perguntar")
-def processar_pergunta(pergunta: Pergunta):
+def processar_pergunta(pergunta: Pergunta, db: Session = Depends(get_db)):
     """
-    Recebe uma pergunta do front-end, processa com o Gemini e retorna a resposta.
+    Recebe uma pergunta do front-end, processa com o Gemini, retorna a resposta e salva a pergunta no banco.
     """
     contexto = carregar_contexto()
     resposta_do_bot = perguntar_gemini(contexto, pergunta.pergunta)
+
+    log_db = LogPergunta(pergunta=pergunta.pergunta)
+    db.add(log_db)
+    db.commit()
+
+
     return {"resposta": resposta_do_bot}
+
+
+@app.get("/logs")
+def ler_logs(db: Session = Depends(get_db)):
+    """
+    Retorna as últimas 10 perguntas que foram feitas e salvas no banco.
+    """
+    logs = db.query(LogPergunta).order_by(LogPergunta.id.desc()).limit(10).all()
+    return logs
 
 
 print("✅ Servidor FastAPI pronto. Acesse http://127.0.0.1:8000/docs para ver a documentação da API.")
